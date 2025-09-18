@@ -50,6 +50,7 @@
 #define ODRIVE
 #define VESC
 #define MTENCODERSPI // requires SPI3
+#define AS5048A_ENCODERSPI // requires SPI3
 #define CANBUTTONS // Requires CAN
 #define CANANALOG // Requires CAN
 #define BISSENCODER // Requires SPI3

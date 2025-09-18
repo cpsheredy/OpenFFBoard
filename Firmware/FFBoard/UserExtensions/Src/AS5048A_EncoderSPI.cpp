@@ -1,0 +1,232 @@
+/*
+ * AS5048A_EncoderSPI.cpp
+ *
+ *  Created on: 18.09.2025
+ *      Author: Colin
+ */
+
+#include "AS5048A_EncoderSPI.h"
+#include "constants.h"
+#ifdef AS5048A_ENCODERSPI //something odd here
+bool AS5048A_EncoderSPI::inUse = false;
+
+ClassIdentifier AS5048A_EncoderSPI::info = {
+		 .name = "AS5048A" ,
+		 .id=CLSID_ENCODER_MTSPI,
+ };
+const ClassIdentifier AS5048A_EncoderSPI::getInfo(){
+	return info;
+}
+
+AS5048A_EncoderSPI::AS5048A_EncoderSPI() : SPIDevice(ENCODER_SPI_PORT,ENCODER_SPI_PORT.getFreeCsPins()[0]), CommandHandler("mtenc",CLSID_ENCODER_MTSPI,0),cpp_freertos::Thread("MTENC",256,42) {
+	AS5048A_EncoderSPI::inUse = true;
+	this->spiConfig.peripheral.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_4; // 4 = 10MHz 8 = 5MHz
+	this->spiConfig.peripheral.FirstBit = SPI_FIRSTBIT_MSB;
+	this->spiConfig.peripheral.CLKPhase = SPI_PHASE_2EDGE;
+	this->spiConfig.peripheral.CLKPolarity = SPI_POLARITY_HIGH;
+	this->spiConfig.cspol = true;
+
+	restoreFlash();
+	spiPort.reserveCsPin(this->spiConfig.cs);
+
+	CommandHandler::registerCommands();
+	registerCommand("cs", AS5048A_EncoderSPI_commands::cspin, "CS pin",CMDFLAG_GET | CMDFLAG_SET);
+	registerCommand("pos", AS5048A_EncoderSPI_commands::pos, "Position",CMDFLAG_GET | CMDFLAG_SET);
+	registerCommand("errors", AS5048A_EncoderSPI_commands::errors, "Parity error count",CMDFLAG_GET);
+	this->Start();
+}
+
+AS5048A_EncoderSPI::~AS5048A_EncoderSPI() {
+	AS5048A_EncoderSPI::inUse = false;
+	spiPort.freeCsPin(this->spiConfig.cs);
+}
+
+void AS5048A_EncoderSPI::restoreFlash(){
+	uint16_t conf_int = Flash_ReadDefault(ADR_MTENC_CONF1, 0);
+	offset = Flash_ReadDefault(ADR_MTENC_OFS, 0) << 2;
+	uint8_t cspin = conf_int & 0xF;
+	setCsPin(cspin);
+}
+
+void AS5048A_EncoderSPI::saveFlash(){
+	uint16_t conf_int = this->cspin & 0xF;
+	Flash_Write(ADR_MTENC_CONF1, conf_int);
+	Flash_Write(ADR_MTENC_OFS, offset >> 2);
+}
+
+
+void AS5048A_EncoderSPI::Run(){
+	while(true){
+		requestNewDataSem.Take(); // Wait until a position is requested
+		//spiPort.receive_DMA(spi_buf, bytes, this); // Receive next frame
+		updateAngleStatus();
+		this->WaitForNotification();  // Wait until DMA is finished
+		if(updateAngleStatusCb()){
+
+			if(curAngleInt-lastAngleInt > 0x20000){ // Underflowed
+				rotations--;
+			}
+			else if(lastAngleInt-curAngleInt > 0x20000){ // Overflowed
+				rotations++;
+			}
+			lastAngleInt = curAngleInt;
+
+			curPos = rotations * getCpr() + curAngleInt; // Update position
+		}else{
+			errors++;
+		}
+		waitForUpdateSem.Give();
+		updateInProgress = false;
+	}
+}
+
+void AS5048A_EncoderSPI::setCsPin(uint8_t cspin){
+	spiPort.freeCsPin(this->spiConfig.cs);
+	this->cspin = std::min<uint8_t>(spiPort.getCsPins().size(), cspin);
+	this->spiConfig.cs = *spiPort.getCsPin(this->cspin);
+	initSPI();
+	spiPort.reserveCsPin(this->spiConfig.cs);
+}
+
+void AS5048A_EncoderSPI::initSPI(){
+	spiPort.takeSemaphore();
+
+	spiPort.configurePort(&this->spiConfig.peripheral);
+	spiPort.giveSemaphore();
+}
+
+/**
+ * MT encoder reads 1 byte and transmits 1 byte back after that
+ */
+uint8_t AS5048A_EncoderSPI::readSpi(uint8_t addr){
+
+	uint8_t txbuf[2] = {(uint8_t)(addr | MAGNTEK_READ),0};
+	uint8_t rxbuf[2] = {0,0};
+	spiPort.transmitReceive(txbuf, rxbuf, 2, this,100);
+
+	return rxbuf[1];
+}
+
+void AS5048A_EncoderSPI::writeSpi(uint8_t addr,uint8_t data){
+	uint8_t txbuf[2] = {addr,data};
+	spiPort.transmit(txbuf, 2, this,100);
+}
+
+void AS5048A_EncoderSPI::setPos(int32_t pos){
+	offset = curPos - pos;
+}
+
+
+void AS5048A_EncoderSPI::spiTxRxCompleted(SPIPort* port){
+
+	if(updateInProgress){
+		NotifyFromISR();
+		//updateAngleStatusCb();
+		memcpy(rxbuf,rxbuf_t,4);
+	}
+}
+
+
+/**
+ * Reads the angle and diagnostic registers in burst mode
+ */
+void AS5048A_EncoderSPI::updateAngleStatus(){
+
+	uint8_t txbufNew[4] = {0x03 | MAGNTEK_READ,0,0,0};
+	memcpy(this->txbuf,txbufNew,4);
+
+	spiPort.transmitReceive_DMA(txbuf, rxbuf_t, 4, this);
+
+
+}
+
+bool AS5048A_EncoderSPI::updateAngleStatusCb(){
+	uint32_t angle17_10 = rxbuf[1];
+	uint32_t angle9_4 = rxbuf[2];
+	uint32_t angle3_0 = rxbuf[3];
+
+	// Parity check byte 2
+	uint8_t pc1 = angle17_10 ^ angle17_10 >> 1;
+	pc1 = pc1 ^ pc1 >> 2;
+	pc1 = pc1 ^ pc1 >> 4;
+
+	uint8_t pc1_2 = angle9_4 ^ angle9_4 >> 1;
+	pc1_2 = pc1_2 ^ pc1_2 >> 2;
+	pc1_2 = pc1_2 ^ pc1_2 >> 4;
+
+	// Parity check byte 1
+	angle3_0 = angle3_0 >> 2; // shift 2
+	uint8_t pc2 = (angle3_0) ^ (angle3_0) >> 1;
+	pc2 = pc2 ^ pc2 >> 2;
+	pc2 = pc2 ^ pc2 >> 4;
+
+	nomag = 	(angle9_4 & 0x02) >> 1;
+	overspeed = (angle3_0 & 0x04) >> 2;
+	angle9_4 = 	(angle9_4 & 0xFC) >> 2;
+	angle3_0 = 	angle3_0 >> 2;//(angle3_0 & 0xF0) >> 4;
+
+
+	bool parity_ok = !(pc2 & 1) && ((pc1 & 1) == (pc1_2 & 1));
+
+	curAngleInt = (angle17_10 << 10) | (angle9_4 << 4) | (angle3_0);
+
+
+	this->updateInProgress = false;
+
+	return parity_ok; // ok if both bytes have even parity
+}
+
+int32_t AS5048A_EncoderSPI::getPos(){
+
+	return getPosAbs() - offset;
+}
+
+int32_t AS5048A_EncoderSPI::getPosAbs(){
+	if(updateInProgress){ // If a transfer is still in progress return the last result
+		return curPos;
+	}
+	updateInProgress = true;
+	requestNewDataSem.Give(); // Start transfer
+	waitForUpdateSem.Take(10); // Wait a bit
+
+	return curPos;
+}
+
+uint32_t AS5048A_EncoderSPI::getCpr(){
+	return 262144;
+}
+
+
+
+CommandStatus AS5048A_EncoderSPI::command(const ParsedCommand& cmd,std::vector<CommandReply>& replies){
+	switch(static_cast<AS5048A_EncoderSPI_commands>(cmd.cmdId)){
+	case AS5048A_EncoderSPI_commands::cspin:
+		if(cmd.type==CMDtype::get){
+			replies.emplace_back(this->cspin+1);
+		}else if(cmd.type==CMDtype::set){
+			this->setCsPin(cmd.val-1);
+		}else{
+			return CommandStatus::ERR;
+		}
+		break;
+
+	case AS5048A_EncoderSPI_commands::pos:
+		if(cmd.type==CMDtype::get){
+			replies.emplace_back(getPos());
+		}else if(cmd.type==CMDtype::set){
+			this->setPos(cmd.val);
+		}else{
+			return CommandStatus::ERR;
+		}
+		break;
+	case AS5048A_EncoderSPI_commands::errors:
+		replies.emplace_back(errors);
+		break;
+	default:
+		return CommandStatus::NOT_FOUND;
+	}
+
+	return CommandStatus::OK;
+}
+
+#endif
