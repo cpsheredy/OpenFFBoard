@@ -10,6 +10,8 @@
 #include "MtEncoderSPI.h"
 #include "EncoderBissC.h"
 #include "EncoderSSI.h"
+#include "AS5048A_EncoderSPI.h"
+
 // 0-63 valid ids
 #ifndef ENCODERSOURCES_DEFAULT_OVERRIDE
 std::vector<class_entry<Encoder>> const Encoder::all_encoders =
@@ -28,6 +30,9 @@ std::vector<class_entry<Encoder>> const Encoder::all_encoders =
 #endif
 #ifdef SSIENCODER
 		add_class<EncoderSSI, Encoder>(6),
+#endif
+#ifdef AS5048A_ENCODERSPI
+		add_class<AS5048A_EncoderSPI, Encoder>(7),
 #endif
 };
 #endif
