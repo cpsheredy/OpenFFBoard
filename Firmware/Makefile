@@ -39,6 +39,7 @@ TARGET = OpenFFBoard_$(MCU_TARGET)
 OUTPUT_DIR = $(BUILD_DIR)
 
 # C sources
+
 C_SOURCES = $(wildcard $(TARGET_DIR)/Core/Src/*.c)
 C_SOURCES += $(wildcard $(TARGET_DIR)/Core/ThreadSafe/*.c)
 C_SOURCES += $(wildcard $(TARGET_DIR)/Drivers/STM32F4xx_HAL_Driver/Src/*.c)

@@ -6,6 +6,8 @@
 #include "cpp_target_config.h"
 #include "cmsis_os.h"
 #include "tusb.h"
+#include "spi_bridge_demo.h"
+
 
 uint32_t clkmhz = HAL_RCC_GetHCLKFreq() / 100000;
 
@@ -90,6 +92,11 @@ void cppmain() {
 	mainclassChosen = true;
 
 	mainclass->usbInit(); // Let mainclass initialize usb
+
+	// SPI Bridge test demo:
+	if (!initSPIBridge()) {
+		Error_Handler();
+	}
 
 	while(running){
 		mainclass->update();

@@ -132,8 +132,9 @@ void ExitDFU();
 #define SPI2_NSS_GPIO_Port GPIOB
 #define SPI2_SS2_Pin GPIO_PIN_8
 #define SPI2_SS2_GPIO_Port GPIOD
-#define SPI2_SS3_Pin GPIO_PIN_9
-#define SPI2_SS3_GPIO_Port GPIOD
+#define SPI2_IRQ_Pin GPIO_PIN_9
+#define SPI2_IRQ_GPIO_Port GPIOD
+#define SPI2_IRQ_EXTI_IRQn EXTI9_5_IRQn
 #define ENCODER_Z_Pin GPIO_PIN_15
 #define ENCODER_Z_GPIO_Port GPIOD
 #define ENCODER_Z_EXTI_IRQn EXTI15_10_IRQn
