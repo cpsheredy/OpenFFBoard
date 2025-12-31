@@ -275,22 +275,14 @@ spi_status_t SPIBridge::sendPacket(spi_packet_t* packet) {
     
     uint16_t txSize = SPI_BRIDGE_HEADER_SIZE + packet->length + SPI_BRIDGE_CRC_SIZE;
     
-    // Copy to TX buffer
     memcpy(txBuffer, packet, txSize);
+    memset(rxBuffer, 0xFF, txSize);  // Clear RX buffer
     
-    // beginSpiTransfer handles semaphore AND CS
     beginSpiTransfer(&spiPort);
-    
-    // Transmit packet
-    HAL_SPI_Transmit(spiPort.getPortHandle(), txBuffer, txSize, SPI_BRIDGE_TIMEOUT_MS);
-    
-    // Read status byte
-    uint8_t status;
-    HAL_SPI_Receive(spiPort.getPortHandle(), &status, 1, SPI_BRIDGE_TIMEOUT_MS);
-    
+    HAL_SPI_TransmitReceive(spiPort.getPortHandle(), txBuffer, rxBuffer, txSize, SPI_BRIDGE_TIMEOUT_MS);
     endSpiTransfer(&spiPort);
     
-    return (spi_status_t)status;
+    return SPI_STATUS_OK;  // For now, ignore rxBuffer contents
 }
 
 spi_status_t SPIBridge::receivePacket(spi_packet_t* packet) {
